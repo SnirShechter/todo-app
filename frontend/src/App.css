@@ -15,3 +15,13 @@ h1 { text-align: center; margin-bottom: 24px; font-size: 28px; }
 .delete { background: none; border: none; font-size: 18px; color: #999; cursor: pointer; padding: 4px 8px; }
 .delete:hover { color: #ef4444; }
 .empty { text-align: center; color: #999; margin-top: 40px; }
+.header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.header h1 { margin-bottom: 0; }
+.user-info { display: flex; align-items: center; gap: 12px; }
+.user-name { font-size: 14px; color: #666; }
+.logout-btn { font-size: 13px; color: #4f46e5; text-decoration: none; padding: 4px 12px; border: 1px solid #4f46e5; border-radius: 6px; }
+.logout-btn:hover { background: #4f46e5; color: white; }
+.login-box { text-align: center; padding: 40px; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.login-box p { color: #666; margin-bottom: 20px; }
+.login-btn { display: inline-block; padding: 12px 32px; background: #18181b; color: white; text-decoration: none; border-radius: 8px; font-size: 16px; font-weight: 600; }
+.login-btn:hover { background: #3f3f46; }

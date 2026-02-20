@@ -8,15 +8,36 @@ interface Todo {
   created_at: string;
 }
 
+interface User {
+  sub: string;
+  email: string;
+  name: string;
+}
+
 const API = "/api/todos";
 
 function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [input, setInput] = useState("");
 
-  const load = () => fetch(API).then((r) => r.json()).then(setTodos);
+  // Check auth on mount
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((u) => {
+        setUser(u);
+        setLoading(false);
+        if (u) loadTodos();
+      })
+      .catch(() => setLoading(false));
+  }, []);
 
-  useEffect(() => { load(); }, []);
+  const loadTodos = () =>
+    fetch(API)
+      .then((r) => r.json())
+      .then(setTodos);
 
   const add = async () => {
     if (!input.trim()) return;
@@ -26,7 +47,7 @@ function App() {
       body: JSON.stringify({ text: input.trim() }),
     });
     setInput("");
-    load();
+    loadTodos();
   };
 
   const toggle = async (t: Todo) => {
@@ -35,17 +56,47 @@ function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ completed: !t.completed }),
     });
-    load();
+    loadTodos();
   };
 
   const remove = async (id: number) => {
     await fetch(`${API}/${id}`, { method: "DELETE" });
-    load();
+    loadTodos();
   };
+
+  if (loading) {
+    return (
+      <div className="container">
+        <p className="empty">Loading...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="container">
+        <h1>📝 Todo</h1>
+        <div className="login-box">
+          <p>Sign in to manage your todos</p>
+          <a href="/api/auth/login" className="login-btn">
+            Sign In →
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="container">
-      <h1>📝 Shared Todo</h1>
+      <div className="header">
+        <h1>📝 Todo</h1>
+        <div className="user-info">
+          <span className="user-name">{user.name || user.email}</span>
+          <a href="/api/auth/logout" className="logout-btn">
+            Sign Out
+          </a>
+        </div>
+      </div>
       <div className="add-row">
         <input
           value={input}
@@ -60,14 +111,22 @@ function App() {
         {todos.map((t) => (
           <li key={t.id} className={t.completed ? "done" : ""}>
             <label>
-              <input type="checkbox" checked={t.completed} onChange={() => toggle(t)} />
+              <input
+                type="checkbox"
+                checked={t.completed}
+                onChange={() => toggle(t)}
+              />
               <span>{t.text}</span>
             </label>
-            <button className="delete" onClick={() => remove(t.id)}>✕</button>
+            <button className="delete" onClick={() => remove(t.id)}>
+              ✕
+            </button>
           </li>
         ))}
       </ul>
-      {todos.length === 0 && <p className="empty">No todos yet. Add one above!</p>}
+      {todos.length === 0 && (
+        <p className="empty">No todos yet. Add one above!</p>
+      )}
     </div>
   );
 }
