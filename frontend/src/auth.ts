@@ -229,17 +229,30 @@ export function isAuthenticated(): boolean {
   return !!_accessToken && (!isTokenExpired(_accessToken) || !!_refreshToken);
 }
 
-/** Logout — end Authentik session + clear local tokens.
- *  Redirects to Authentik's end-session (which kills the SSO session),
- *  then Authentik shows its login page. Next Sign In from todo will
- *  go through the authorize flow and come back to todo after login. */
+/** Logout — clear tokens and force re-login.
+ *  Redirects to Authentik's authorize endpoint with prompt=login,
+ *  which forces the login page. After login → back to todo. */
 export async function logout() {
-  const config = await getOIDCConfig();
-  const idToken = _idToken;
   clearTokens();
+  // Redirect to authorize with prompt=login — forces Authentik to show
+  // login page even if there's an active session, and redirect_uri
+  // ensures the user comes back to todo after authenticating.
+  const config = await getOIDCConfig();
+  const { verifier, challenge } = await createPKCE();
+  const state = randomString(32);
 
-  const url = new URL(config.end_session_endpoint);
-  if (idToken) url.searchParams.set("id_token_hint", idToken);
+  sessionStorage.setItem("pkce_verifier", verifier);
+  sessionStorage.setItem("auth_state", state);
+
+  const url = new URL(config.authorization_endpoint);
+  url.searchParams.set("client_id", CLIENT_ID);
+  url.searchParams.set("redirect_uri", REDIRECT_URI);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", SCOPES);
+  url.searchParams.set("state", state);
+  url.searchParams.set("code_challenge", challenge);
+  url.searchParams.set("code_challenge_method", "S256");
+  url.searchParams.set("prompt", "login");
   window.location.href = url.toString();
 }
 
