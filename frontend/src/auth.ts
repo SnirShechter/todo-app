@@ -48,14 +48,19 @@ async function getOIDCConfig() {
 // ── Token storage (memory + sessionStorage for refresh) ─────
 let _accessToken: string | null = sessionStorage.getItem("access_token");
 let _refreshToken: string | null = sessionStorage.getItem("refresh_token");
+let _idToken: string | null = sessionStorage.getItem("id_token");
 let _user: { sub: string; email: string; name: string } | null = null;
 
-function storeTokens(access: string, refresh?: string) {
+function storeTokens(access: string, refresh?: string, idToken?: string) {
   _accessToken = access;
   sessionStorage.setItem("access_token", access);
   if (refresh) {
     _refreshToken = refresh;
     sessionStorage.setItem("refresh_token", refresh);
+  }
+  if (idToken) {
+    _idToken = idToken;
+    sessionStorage.setItem("id_token", idToken);
   }
   // Decode user from access token
   try {
@@ -73,9 +78,11 @@ function storeTokens(access: string, refresh?: string) {
 function clearTokens() {
   _accessToken = null;
   _refreshToken = null;
+  _idToken = null;
   _user = null;
   sessionStorage.removeItem("access_token");
   sessionStorage.removeItem("refresh_token");
+  sessionStorage.removeItem("id_token");
 }
 
 // ── Check if token is expired ──────────────────────────────
@@ -159,7 +166,7 @@ export async function handleCallback(): Promise<boolean> {
   }
 
   const tokens = await res.json();
-  storeTokens(tokens.access_token, tokens.refresh_token);
+  storeTokens(tokens.access_token, tokens.refresh_token, tokens.id_token);
 
   // Clean up
   sessionStorage.removeItem("pkce_verifier");
@@ -191,7 +198,7 @@ async function refreshAccessToken(): Promise<boolean> {
   }
 
   const tokens = await res.json();
-  storeTokens(tokens.access_token, tokens.refresh_token);
+  storeTokens(tokens.access_token, tokens.refresh_token, tokens.id_token);
   return true;
 }
 
@@ -222,30 +229,21 @@ export function isAuthenticated(): boolean {
   return !!_accessToken && (!isTokenExpired(_accessToken) || !!_refreshToken);
 }
 
-/** Logout — clear tokens and force re-login.
- *  Redirects to Authentik's authorize endpoint with prompt=login,
- *  which forces the login page. After login → back to todo. */
+/** Logout — end session in Authentik and redirect back to todo app.
+ *  Uses OIDC RP-Initiated Logout: calls end_session_endpoint with
+ *  id_token_hint so Authentik knows who's logging out, and
+ *  post_logout_redirect_uri to come back to the todo app. */
 export async function logout() {
+  const idToken = _idToken;
   clearTokens();
-  // Redirect to authorize with prompt=login — forces Authentik to show
-  // login page even if there's an active session, and redirect_uri
-  // ensures the user comes back to todo after authenticating.
+
   const config = await getOIDCConfig();
-  const { verifier, challenge } = await createPKCE();
-  const state = randomString(32);
+  const url = new URL(config.end_session_endpoint);
+  if (idToken) {
+    url.searchParams.set("id_token_hint", idToken);
+  }
+  url.searchParams.set("post_logout_redirect_uri", window.location.origin);
 
-  sessionStorage.setItem("pkce_verifier", verifier);
-  sessionStorage.setItem("auth_state", state);
-
-  const url = new URL(config.authorization_endpoint);
-  url.searchParams.set("client_id", CLIENT_ID);
-  url.searchParams.set("redirect_uri", REDIRECT_URI);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", SCOPES);
-  url.searchParams.set("state", state);
-  url.searchParams.set("code_challenge", challenge);
-  url.searchParams.set("code_challenge_method", "S256");
-  url.searchParams.set("prompt", "login");
   window.location.href = url.toString();
 }
 
@@ -260,7 +258,7 @@ export async function initAuth(): Promise<boolean> {
   if (_accessToken) {
     if (!isTokenExpired(_accessToken)) {
       // Decode user from stored token
-      storeTokens(_accessToken, _refreshToken || undefined);
+      storeTokens(_accessToken, _refreshToken || undefined, _idToken || undefined);
       return true;
     }
     // Try refresh
