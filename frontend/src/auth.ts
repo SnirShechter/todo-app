@@ -229,18 +229,25 @@ export function isAuthenticated(): boolean {
   return !!_accessToken && (!isTokenExpired(_accessToken) || !!_refreshToken);
 }
 
-/** Logout — clear tokens + end Authentik session + redirect back to app.
- *  Uses id_token_hint so Authentik trusts the post_logout_redirect_uri. */
+/** Logout — kill Authentik session via hidden iframe, then redirect to app.
+ *  This avoids Authentik's logout page entirely — transparent to the user. */
 export async function logout() {
   const config = await getOIDCConfig();
   const idToken = _idToken;
   clearTokens();
-  const url = new URL(config.end_session_endpoint);
-  if (idToken) {
-    url.searchParams.set("id_token_hint", idToken);
-  }
-  url.searchParams.set("post_logout_redirect_uri", window.location.origin);
-  window.location.href = url.toString();
+
+  // End Authentik session via hidden iframe (so its cookies get cleared)
+  const iframe = document.createElement("iframe");
+  iframe.style.display = "none";
+  const endSessionUrl = new URL(config.end_session_endpoint);
+  if (idToken) endSessionUrl.searchParams.set("id_token_hint", idToken);
+  iframe.src = endSessionUrl.toString();
+  document.body.appendChild(iframe);
+
+  // Give the iframe a moment to load and kill the session, then go home
+  await new Promise((r) => setTimeout(r, 1500));
+  iframe.remove();
+  window.location.href = "/";
 }
 
 /** Initialize — check for callback or restore session */
