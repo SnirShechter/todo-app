@@ -31,20 +31,30 @@ function App() {
 
   // Initialize auth on mount
   useEffect(() => {
-    initAuth().then((ok) => {
-      setAuthed(ok || isAuthenticated());
-      setReady(true);
-    });
+    initAuth()
+      .then((ok) => {
+        setAuthed(ok || isAuthenticated());
+        setReady(true);
+      })
+      .catch(() => {
+        setAuthed(false);
+        setReady(true);
+      });
   }, []);
 
   const loadTodos = useCallback(async () => {
     try {
       const res = await apiFetch("/api/todos");
-      if (res.ok) setTodos(await res.json());
-      else if (res.status === 401) {
+      if (res.ok) {
+        setTodos(await res.json());
+      } else if (res.status === 401) {
+        // Token invalid/expired and refresh failed — show login
         setAuthed(false);
       }
-    } catch {}
+    } catch {
+      // No valid token at all — show login
+      setAuthed(false);
+    }
   }, []);
 
   // Load todos when authenticated
