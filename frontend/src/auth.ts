@@ -222,8 +222,18 @@ export function isAuthenticated(): boolean {
   return !!_accessToken && (!isTokenExpired(_accessToken) || !!_refreshToken);
 }
 
-/** Logout — clear tokens + redirect to Authentik end session */
-export async function logout() {
+/** Logout — clear tokens and go back to app login screen.
+ *  We don't redirect to Authentik's end-session because:
+ *  - It shows an intermediate Authentik page (not transparent)
+ *  - The user stays logged into Authentik (so next login is instant)
+ *  - If you need full Authentik logout too, call fullLogout() */
+export function logout() {
+  clearTokens();
+  window.location.href = "/";
+}
+
+/** Full logout — also ends the Authentik session */
+export async function fullLogout() {
   const config = await getOIDCConfig();
   clearTokens();
   const url = new URL(config.end_session_endpoint);
