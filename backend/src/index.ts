@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { serve } from "@hono/node-server";
 import * as jose from "jose";
 import pg from "pg";
@@ -11,33 +10,18 @@ const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const OIDC_ISSUER = process.env.OIDC_ISSUER || "https://auth.snir.sh/application/o/todo-app/";
-const CLIENT_ID = process.env.OIDC_CLIENT_ID || "";
-const CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET || "";
-const REDIRECT_URI = process.env.OIDC_REDIRECT_URI || "";
-const SESSION_SECRET = process.env.SESSION_SECRET || "change-me-in-production";
-const APP_URL = process.env.APP_URL || "https://todo.snir.sh";
+const OIDC_CLIENT_ID = process.env.OIDC_CLIENT_ID || "";
 
-const sessionKey = new TextEncoder().encode(SESSION_SECRET);
+// ── JWKS (cached) ──────────────────────────────────────────
+let jwksClient: ReturnType<typeof jose.createRemoteJWKSet> | null = null;
 
-// ── OIDC Discovery (cached) ────────────────────────────────
-let oidcConfig: any = null;
-let jwks: jose.JSONWebKeySet | null = null;
-
-async function getOIDCConfig() {
-  if (!oidcConfig) {
-    const res = await fetch(`${OIDC_ISSUER}.well-known/openid-configuration`);
-    oidcConfig = await res.json();
+function getJWKS() {
+  if (!jwksClient) {
+    jwksClient = jose.createRemoteJWKSet(
+      new URL(`${OIDC_ISSUER}jwks/`)
+    );
   }
-  return oidcConfig;
-}
-
-async function getJWKS() {
-  if (!jwks) {
-    const config = await getOIDCConfig();
-    const res = await fetch(config.jwks_uri);
-    jwks = await res.json();
-  }
-  return jose.createLocalJWKSet(jwks as jose.JSONWebKeySet);
+  return jwksClient;
 }
 
 // ── Database ────────────────────────────────────────────────
@@ -56,153 +40,35 @@ async function initDb() {
 // ── App ─────────────────────────────────────────────────────
 const app = new Hono();
 
-app.use("/*", cors());
+app.use("/*", cors({
+  origin: process.env.APP_URL || "https://todo.snir.sh",
+  credentials: true,
+}));
 
-// ── Auth helpers ────────────────────────────────────────────
-async function getSession(c: any) {
-  const token = getCookie(c, "session");
-  if (!token) return null;
-  try {
-    const { payload } = await jose.jwtVerify(token, sessionKey);
-    return payload as { sub: string; email: string; name: string };
-  } catch {
-    return null;
-  }
-}
-
-// Auth middleware — protects routes that need a logged-in user
+// ── Auth middleware ──────────────────────────────────────────
+// Verifies Bearer token directly against Authentik JWKS
 async function requireAuth(c: any, next: () => Promise<void>) {
-  const user = await getSession(c);
-  if (!user) return c.json({ error: "unauthorized" }, 401);
-  c.set("user", user);
-  return next();
-}
-
-// ── Auth routes ─────────────────────────────────────────────
-
-// GET /api/auth/me — return current user (or 401)
-app.get("/api/auth/me", async (c) => {
-  const user = await getSession(c);
-  if (!user) return c.json({ error: "unauthorized" }, 401);
-  return c.json({ sub: user.sub, email: user.email, name: user.name });
-});
-
-// GET /api/auth/login — redirect to Authentik
-app.get("/api/auth/login", async (c) => {
-  const config = await getOIDCConfig();
-  const state = crypto.randomUUID();
-  const nonce = crypto.randomUUID();
-
-  // Store state + nonce in short-lived cookies
-  const cookieOpts = { httpOnly: true, secure: true, sameSite: "Lax" as const, maxAge: 300, path: "/" };
-  setCookie(c, "auth_state", state, cookieOpts);
-  setCookie(c, "auth_nonce", nonce, cookieOpts);
-
-  const url = new URL(config.authorization_endpoint);
-  url.searchParams.set("client_id", CLIENT_ID);
-  url.searchParams.set("redirect_uri", REDIRECT_URI);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", "openid email profile");
-  url.searchParams.set("state", state);
-  url.searchParams.set("nonce", nonce);
-
-  return c.redirect(url.toString());
-});
-
-// GET /api/auth/callback — exchange code for tokens, set session
-app.get("/api/auth/callback", async (c) => {
-  const code = c.req.query("code");
-  const state = c.req.query("state");
-  const error = c.req.query("error");
-
-  if (error) {
-    console.error("OIDC error:", error, c.req.query("error_description"));
-    return c.redirect(`${APP_URL}?error=${error}`);
+  const authHeader = c.req.header("Authorization");
+  if (!authHeader?.startsWith("Bearer ")) {
+    return c.json({ error: "unauthorized" }, 401);
   }
 
-  // Verify state
-  const storedState = getCookie(c, "auth_state");
-  const storedNonce = getCookie(c, "auth_nonce");
-  if (!state || state !== storedState) {
-    return c.text("Invalid state parameter", 400);
-  }
-
-  // Exchange authorization code for tokens
-  const config = await getOIDCConfig();
-  const tokenRes = await fetch(config.token_endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "authorization_code",
-      code: code!,
-      redirect_uri: REDIRECT_URI,
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
-    }),
-  });
-
-  if (!tokenRes.ok) {
-    const err = await tokenRes.text();
-    console.error("Token exchange failed:", err);
-    return c.text("Token exchange failed", 500);
-  }
-
-  const tokens = await tokenRes.json();
-
-  // Verify ID token signature + claims
-  const jwks = await getJWKS();
-  let idToken: jose.JWTPayload;
+  const token = authHeader.slice(7);
   try {
-    const result = await jose.jwtVerify(tokens.id_token, jwks, {
+    const { payload } = await jose.jwtVerify(token, getJWKS(), {
       issuer: OIDC_ISSUER,
-      audience: CLIENT_ID,
     });
-    idToken = result.payload;
-  } catch (e) {
-    console.error("ID token verification failed:", e);
-    return c.text("ID token verification failed", 400);
+    c.set("user", {
+      sub: payload.sub,
+      email: (payload as any).email || "",
+      name: (payload as any).name || (payload as any).preferred_username || "",
+    });
+    return next();
+  } catch (e: any) {
+    console.error("JWT verification failed:", e.message);
+    return c.json({ error: "invalid_token" }, 401);
   }
-
-  // Verify nonce
-  if (storedNonce && idToken.nonce !== storedNonce) {
-    return c.text("Invalid nonce", 400);
-  }
-
-  // Create session JWT (stored in httpOnly cookie)
-  const session = await new jose.SignJWT({
-    sub: idToken.sub as string,
-    email: (idToken as any).email || "",
-    name: (idToken as any).name || (idToken as any).preferred_username || "",
-  })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime("30d")
-    .sign(sessionKey);
-
-  setCookie(c, "session", session, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "Lax",
-    maxAge: 30 * 24 * 60 * 60,
-    path: "/",
-  });
-
-  // Clean up OIDC cookies
-  deleteCookie(c, "auth_state", { path: "/" });
-  deleteCookie(c, "auth_nonce", { path: "/" });
-
-  return c.redirect(APP_URL);
-});
-
-// GET /api/auth/logout — clear session, redirect to Authentik logout
-app.get("/api/auth/logout", async (c) => {
-  const config = await getOIDCConfig();
-  deleteCookie(c, "session", { path: "/" });
-
-  const logoutUrl = new URL(config.end_session_endpoint);
-  logoutUrl.searchParams.set("post_logout_redirect_uri", APP_URL);
-  return c.redirect(logoutUrl.toString());
-});
+}
 
 // ── Todo routes (protected) ─────────────────────────────────
 app.get("/api/todos", requireAuth, async (c) => {
@@ -252,5 +118,6 @@ initDb().then(() => {
   serve({ fetch: app.fetch, port }, () => {
     console.log(`Backend running on port ${port}`);
     console.log(`OIDC issuer: ${OIDC_ISSUER}`);
+    console.log(`Verifying JWTs against: ${OIDC_ISSUER}jwks/`);
   });
 });

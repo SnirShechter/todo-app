@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { initAuth, login, logout, getUser, getAccessToken, isAuthenticated } from "./auth";
 import "./App.css";
 
 interface Todo {
@@ -8,42 +9,53 @@ interface Todo {
   created_at: string;
 }
 
-interface User {
-  sub: string;
-  email: string;
-  name: string;
+/** Fetch wrapper that adds Authorization header */
+async function apiFetch(path: string, opts: RequestInit = {}) {
+  const token = await getAccessToken();
+  if (!token) throw new Error("No token");
+  return fetch(path, {
+    ...opts,
+    headers: {
+      ...opts.headers,
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
 }
 
-const API = "/api/todos";
-
 function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [ready, setReady] = useState(false);
+  const [authed, setAuthed] = useState(false);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [input, setInput] = useState("");
 
-  // Check auth on mount
+  // Initialize auth on mount
   useEffect(() => {
-    fetch("/api/auth/me")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((u) => {
-        setUser(u);
-        setLoading(false);
-        if (u) loadTodos();
-      })
-      .catch(() => setLoading(false));
+    initAuth().then((ok) => {
+      setAuthed(ok || isAuthenticated());
+      setReady(true);
+    });
   }, []);
 
-  const loadTodos = () =>
-    fetch(API)
-      .then((r) => r.json())
-      .then(setTodos);
+  const loadTodos = useCallback(async () => {
+    try {
+      const res = await apiFetch("/api/todos");
+      if (res.ok) setTodos(await res.json());
+      else if (res.status === 401) {
+        setAuthed(false);
+      }
+    } catch {}
+  }, []);
+
+  // Load todos when authenticated
+  useEffect(() => {
+    if (authed) loadTodos();
+  }, [authed, loadTodos]);
 
   const add = async () => {
     if (!input.trim()) return;
-    await fetch(API, {
+    await apiFetch("/api/todos", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: input.trim() }),
     });
     setInput("");
@@ -51,20 +63,19 @@ function App() {
   };
 
   const toggle = async (t: Todo) => {
-    await fetch(`${API}/${t.id}`, {
+    await apiFetch(`/api/todos/${t.id}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ completed: !t.completed }),
     });
     loadTodos();
   };
 
   const remove = async (id: number) => {
-    await fetch(`${API}/${id}`, { method: "DELETE" });
+    await apiFetch(`/api/todos/${id}`, { method: "DELETE" });
     loadTodos();
   };
 
-  if (loading) {
+  if (!ready) {
     return (
       <div className="container">
         <p className="empty">Loading...</p>
@@ -72,29 +83,31 @@ function App() {
     );
   }
 
-  if (!user) {
+  if (!authed) {
     return (
       <div className="container">
         <h1>📝 Todo</h1>
         <div className="login-box">
           <p>Sign in to manage your todos</p>
-          <a href="/api/auth/login" className="login-btn">
+          <button onClick={login} className="login-btn">
             Sign In →
-          </a>
+          </button>
         </div>
       </div>
     );
   }
+
+  const user = getUser();
 
   return (
     <div className="container">
       <div className="header">
         <h1>📝 Todo</h1>
         <div className="user-info">
-          <span className="user-name">{user.name || user.email}</span>
-          <a href="/api/auth/logout" className="logout-btn">
+          <span className="user-name">{user?.name || user?.email}</span>
+          <button onClick={logout} className="logout-btn">
             Sign Out
-          </a>
+          </button>
         </div>
       </div>
       <div className="add-row">
