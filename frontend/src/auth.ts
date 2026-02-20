@@ -48,19 +48,14 @@ async function getOIDCConfig() {
 // ── Token storage (memory + sessionStorage for refresh) ─────
 let _accessToken: string | null = sessionStorage.getItem("access_token");
 let _refreshToken: string | null = sessionStorage.getItem("refresh_token");
-let _idToken: string | null = sessionStorage.getItem("id_token");
 let _user: { sub: string; email: string; name: string } | null = null;
 
-function storeTokens(access: string, refresh?: string, idToken?: string) {
+function storeTokens(access: string, refresh?: string) {
   _accessToken = access;
   sessionStorage.setItem("access_token", access);
   if (refresh) {
     _refreshToken = refresh;
     sessionStorage.setItem("refresh_token", refresh);
-  }
-  if (idToken) {
-    _idToken = idToken;
-    sessionStorage.setItem("id_token", idToken);
   }
   // Decode user from access token
   try {
@@ -78,11 +73,9 @@ function storeTokens(access: string, refresh?: string, idToken?: string) {
 function clearTokens() {
   _accessToken = null;
   _refreshToken = null;
-  _idToken = null;
   _user = null;
   sessionStorage.removeItem("access_token");
   sessionStorage.removeItem("refresh_token");
-  sessionStorage.removeItem("id_token");
 }
 
 // ── Check if token is expired ──────────────────────────────
@@ -166,7 +159,7 @@ export async function handleCallback(): Promise<boolean> {
   }
 
   const tokens = await res.json();
-  storeTokens(tokens.access_token, tokens.refresh_token, tokens.id_token);
+  storeTokens(tokens.access_token, tokens.refresh_token);
 
   // Clean up
   sessionStorage.removeItem("pkce_verifier");
