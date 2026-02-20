@@ -48,16 +48,21 @@ async function getOIDCConfig() {
 // ── Token storage (memory + sessionStorage for refresh) ─────
 let _accessToken: string | null = sessionStorage.getItem("access_token");
 let _refreshToken: string | null = sessionStorage.getItem("refresh_token");
+let _idToken: string | null = sessionStorage.getItem("id_token");
 let _user: { sub: string; email: string; name: string } | null = null;
 
-function storeTokens(access: string, refresh?: string) {
+function storeTokens(access: string, refresh?: string, idToken?: string) {
   _accessToken = access;
   sessionStorage.setItem("access_token", access);
   if (refresh) {
     _refreshToken = refresh;
     sessionStorage.setItem("refresh_token", refresh);
   }
-  // Decode user from ID token (or access token)
+  if (idToken) {
+    _idToken = idToken;
+    sessionStorage.setItem("id_token", idToken);
+  }
+  // Decode user from access token
   try {
     const payload = JSON.parse(atob(access.split(".")[1]));
     _user = {
@@ -73,9 +78,11 @@ function storeTokens(access: string, refresh?: string) {
 function clearTokens() {
   _accessToken = null;
   _refreshToken = null;
+  _idToken = null;
   _user = null;
   sessionStorage.removeItem("access_token");
   sessionStorage.removeItem("refresh_token");
+  sessionStorage.removeItem("id_token");
 }
 
 // ── Check if token is expired ──────────────────────────────
@@ -159,7 +166,7 @@ export async function handleCallback(): Promise<boolean> {
   }
 
   const tokens = await res.json();
-  storeTokens(tokens.access_token, tokens.refresh_token);
+  storeTokens(tokens.access_token, tokens.refresh_token, tokens.id_token);
 
   // Clean up
   sessionStorage.removeItem("pkce_verifier");
@@ -223,11 +230,15 @@ export function isAuthenticated(): boolean {
 }
 
 /** Logout — clear tokens + end Authentik session + redirect back to app.
- *  This fully logs out so the user can switch accounts on next login. */
+ *  Uses id_token_hint so Authentik trusts the post_logout_redirect_uri. */
 export async function logout() {
   const config = await getOIDCConfig();
+  const idToken = _idToken;
   clearTokens();
   const url = new URL(config.end_session_endpoint);
+  if (idToken) {
+    url.searchParams.set("id_token_hint", idToken);
+  }
   url.searchParams.set("post_logout_redirect_uri", window.location.origin);
   window.location.href = url.toString();
 }
