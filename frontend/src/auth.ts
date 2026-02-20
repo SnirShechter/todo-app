@@ -229,25 +229,18 @@ export function isAuthenticated(): boolean {
   return !!_accessToken && (!isTokenExpired(_accessToken) || !!_refreshToken);
 }
 
-/** Logout — kill Authentik session via hidden iframe, then redirect to app.
- *  This avoids Authentik's logout page entirely — transparent to the user. */
+/** Logout — end Authentik session + clear local tokens.
+ *  Redirects to Authentik's end-session (which kills the SSO session),
+ *  then Authentik shows its login page. Next Sign In from todo will
+ *  go through the authorize flow and come back to todo after login. */
 export async function logout() {
   const config = await getOIDCConfig();
   const idToken = _idToken;
   clearTokens();
 
-  // End Authentik session via hidden iframe (so its cookies get cleared)
-  const iframe = document.createElement("iframe");
-  iframe.style.display = "none";
-  const endSessionUrl = new URL(config.end_session_endpoint);
-  if (idToken) endSessionUrl.searchParams.set("id_token_hint", idToken);
-  iframe.src = endSessionUrl.toString();
-  document.body.appendChild(iframe);
-
-  // Give the iframe a moment to load and kill the session, then go home
-  await new Promise((r) => setTimeout(r, 1500));
-  iframe.remove();
-  window.location.href = "/";
+  const url = new URL(config.end_session_endpoint);
+  if (idToken) url.searchParams.set("id_token_hint", idToken);
+  window.location.href = url.toString();
 }
 
 /** Initialize — check for callback or restore session */
